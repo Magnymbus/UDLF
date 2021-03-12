@@ -1,0 +1,4 @@
+name = Universal Door Latch Framework
+version = 1.5.2
+author = Magnymbus
+description = Makes doors behave like doors should; stay closed until opened.
