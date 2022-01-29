@@ -1,7 +1,15 @@
+--global variables
+--bool debug
+--bool verbose
+--tabl latches[]
+
+
 function init()
-	local found = FindShapes("Latch", true) --Only used to get IDs. Indexes are discarded when transferred to Latches.
+	debug = GetBool('savegame.mod.debug')
+	verbose = GetBool('savegame.mod.verbose')
+	local foundLatches = FindShapes("Latch", true) --Only used to get IDs. Indexes are discarded when transferred to Latches.
 	latches = {}
-	for _,ID in pairs(found) do
+	for _,ID in pairs(foundLatches) do
 		latches[ID] = 0
 	end
 	AppendLatchData()
@@ -11,63 +19,68 @@ end
 
 function AppendLatchData() --Just an initialization step to put everything together.
 	for ID, _ in pairs(latches) do
-		local lType = GetTagValue(ID, "Latch")
-		local oFile = "blank"
-		local cFile = "blank"
+		local latchType = GetTagValue(ID, "Latch")
+		local openPath = "blank"
+		local closePath = "blank"
 		if HasTag(ID, "LatchOpenSound") and GetTagValue(ID, "LatchOpenSound") ~= '' then
-			oFile = GetTagValue(ID, "LatchOpenSound")
-		elseif lType == "Vehicle" then
-			oFile = "caropen.ogg"
-		elseif lType == "Structure" then
-			oFile = "clickdown.ogg"
+			openPath = GetTagValue(ID, "LatchOpenSound")
+		elseif latchType == "Vehicle" then
+			openPath = "caropen.ogg"
+		elseif latchType == "Structure" then
+			openPath = "clickdown.ogg"
 		end
 		if HasTag(ID, "LatchCloseSound") and GetTagValue(ID, "LatchCloseSound") ~= '' then
-			cFile = GetTagValue(ID, "LatchCloseSound")
-		elseif lType == "Vehicle" then
-			cFile = "carclose.ogg"
-		elseif lType == "Structure" then
-			cFile = "clickup.ogg"
+			closePath = GetTagValue(ID, "LatchCloseSound")
+		elseif latchType == "Vehicle" then
+			closePath = "carclose.ogg"
+		elseif latchType == "Structure" then
+			closePath = "clickup.ogg"
 		end
-		local oID = LoadSound(oFile)
-		local cID = LoadSound(cFile)
+		local openID = LoadSound(openPath)
+		local closeID = LoadSound(closePath)
 		latches[ID] = {
-			["Type"] = lType, 
-			["CurrentState"] = "Open",
-			["OpenPath"] = oFile, 
-			["ClosePath"] = cFile, 
-			["Open"] = oID, 
-			["Close"] = cID }
+			["Type"] = latchType,
+			["isOpen"] = true,
+			["OpenPath"] = openPath,
+			["ClosePath"] = closePath,
+			["OpenID"] = openID,
+			["CloseID"] = closeID }
 	end
-	CheckLatchDataSanity()
+	if debug then CheckLatchDataSanity() end
 end
 
 
 
 function CheckLatchDataSanity()
 	for ID,_ in pairs(latches) do
-		if latches[ID]["Type"] == nil then DebugPrint("latch type is nil in shape: " .. ID .. " (Check fallback)") end
-		if latches[ID]["ClosePath"] == "blank" then DebugPrint("Latch close sound is blank in shape: " .. ID .. " (Check fallback)") end
-		if latches[ID]["OpenPath"] == "blank" then DebugPrint("Latch open sound is blank in shape: " .. ID .. " (Check fallback)") end
-		if latches[ID]["CurrentState"] ~= "Open" and latches[ID]["CurrentState"] ~= "Close" then DebugPrint("Latch state is invalid in shape: " .. ID) end
+		if latches[ID]["Type"] == nil then DebugPrint("Latch type is nil in shape: " .. ID .. " (No latch type was set. Check your tags: Latch=[Type])") end
+		if latches[ID]["ClosePath"] == "blank" then DebugPrint("Latch close sound is blank in shape: " .. ID .. " (Path is blank or no latch type was set)") end
+		if latches[ID]["OpenPath"] == "blank" then DebugPrint("Latch open sound is blank in shape: " .. ID .. " (Path is blank or no latch type was set)") end
+		if verbose then
+			DebugPrint("Latch Data:")
+			DebugPrint(ID .. "(" .. latches[ID]["Type"] .. "): isOpen = " .. tostring(latches[ID]["isOpen"]) )
+			DebugPrint(latches[ID]["OpenPath"] .. "(" .. latches[ID]["OpenID"] .. ")")
+			DebugPrint(latches[ID]["ClosePath"] .. "(" .. latches[ID]["CloseID"] .. ")")
+		end
 	end
 end
 
 
 
 function tick(dt)
-	local grabbing = GetPlayerGrabShape()
-	for shape,_ in pairs(latches) do
-		local joints = GetShapeJoints(shape)
-		local joint = joints[1]
-		if IsJointBroken(joint) == false then
-			if shape == grabbing and latches[shape]["CurrentState"] == "Close" then						--Unlatch it if it's grabbed
-				SetJointMotor(joint, 0, 0)
-				PlayIndexedSound(shape, "Open")
-				latches[shape]["CurrentState"] = "Open"
-			elseif GetJointMovement(joint) < 0.01 and latches[shape]["CurrentState"] == "Open" and shape ~= grabbing then		--Latch if closed and not grabbed
-				SetJointMotorTarget(joint, 0)
-				PlayIndexedSound(shape, "Close")
-				latches[shape]["CurrentState"] = "Close"
+	local grabShape = GetPlayerGrabShape()
+	for latchShape,_ in pairs(latches) do
+		local shapeJoints = GetShapeJoints(latchShape)
+		local latchJoint = shapeJoints[1]
+		if IsJointBroken(latchJoint) == false then
+			if latchShape == grabShape and latches[latchShape]["isOpen"] == false then	--Unlatch if grabbed
+				SetJointMotor(latchJoint, 0, 0)
+				PlayIndexedSound(latchShape, true)
+				latches[latchShape]["isOpen"] = true
+			elseif GetJointMovement(latchJoint) < 0.01 and latches[latchShape]["isOpen"] == true and latchShape ~= grabShape then		--Latch if closed and not grabbed
+				SetJointMotorTarget(latchJoint, 0)
+				PlayIndexedSound(latchShape, false)
+				latches[latchShape]["isOpen"] = false
 			end
 		end
 	end
@@ -76,42 +89,24 @@ end
 
 
 ---@param shape number Shape ID to play at.
----@param stateToQuery string Sound variant to play.
-function PlayIndexedSound(shape, stateToQuery)
-	local previousState = latches[shape]["CurrentState"]
-	if stateToQuery ~= previousState then														--Make sure not to play the sound if it was just played
-		local sound = latches[shape][stateToQuery]
+---@param openQuery string Sound variant to play.
+function PlayIndexedSound(shape, openQuery)
+	local previousState = latches[shape]["isOpen"]
+	if openQuery ~= previousState then																													--Make sure not to play the sound if it was just played
+		local soundShape = latches[shape]
+		local sound = openQuery and soundShape["OpenID"] or soundShape["CloseID"] 								--ternary: if isOpen then Open else Close. I hate lua ternaries
 		local transform = GetShapeWorldTransform(shape)
-		if stateToQuery == "Close" then															--play at a volume related to closing speed
+		if openQuery == false then																																--play at a volume related to closing speed
 			local parentShape = GetJointOtherShape(GetShapeJoints(shape)[1], shape)
 			local bodyVelocityMagnitude = VecLength(GetBodyVelocity(GetShapeBody(shape)))
 			local parentVelocityMagnitude = VecLength(GetBodyVelocity(GetShapeBody(parentShape)))
 			local relativeVelocity = (bodyVelocityMagnitude - parentVelocityMagnitude)
 			local volume = math.abs(math.tanh(relativeVelocity / 5) * 0.875) + 0.125
 			PlaySound(sound, transform["pos"], volume)
-		else																					--default to max volume if not closing
+		else																																											--default to max volume if not closing
 			PlaySound(sound, transform["pos"], 1)
 		end
 	end
 end
 
 
----@param arg1 string Debug type
----@param arg2 string ID (If applicable)
-function DoDebug(arg1, arg2)
-	if arg1 == "fallback" then
-		DebugPrint("Invalid Latch fallback type: " .. arg2 .. ". Check spelling and case.")
-	elseif arg1 == "LatchData" then
-		if arg2 == nil then
-			DebugPrint("Latch Data:")
-			for ID,_ in pairs(latches) do
-				DoDebug("LatchData", ID)
-			end
-		end
-		DebugPrint(arg2 .. "(" .. latches[arg2]["Type"] .. "): " .. latches[arg2]["CurrentState"])
-		DebugPrint(latches[arg2]["OpenPath"] .. "(" .. latches[arg2]["Open"] .. ")")
-		DebugPrint(latches[arg2]["ClosePath"] .. "(" .. latches[arg2]["Close"] .. ")")
-	else
-		DebugPrint("Bad debug type: " .. arg1)
-	end
-end
